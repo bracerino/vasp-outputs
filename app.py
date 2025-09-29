@@ -386,12 +386,12 @@ def identify_file_type(filename):
 
 
 st.info(
-    "Upload your **VASP output files** into **sidebar** (OSZICAR, INCAR, DOSCAR, EIGENVAL, KPOINTS, vasprun.xml) for analysis. Files are automatically recognized by name.")
+    "Upload your **VASP output files** into **sidebar** (OSZICAR, INCAR, DOSCAR, EIGENVAL, KPOINTS, POSCAR, CONTCAR, vasprun.xml) for analysis. Files are automatically recognized by name.")
 
 uploaded_files = st.sidebar.file_uploader(
     "Upload VASP files",
     accept_multiple_files=True,
-    help="Upload OSZICAR, INCAR, DOSCAR, and/or EIGENVAL files"
+    help="Upload OSZICAR, INCAR, DOSCAR, POSCAR, CONTCAR, vasprun.xml, and/or EIGENVAL files"
 )
 
 st.sidebar.info(
@@ -819,14 +819,23 @@ if uploaded_files:
                             unoccupied_states = dos_df[dos_df['Energy'] > efermi]
 
                             if len(occupied_states) > 0 and len(unoccupied_states) > 0:
-                                vbm_idx = occupied_states['DOS'].idxmax()
-                                vbm_energy = occupied_states.loc[vbm_idx, 'Energy']
+                                threshold = 0.01 * dos_df['DOS'].max()
 
-                                cbm_candidates = unoccupied_states[unoccupied_states['DOS'] > 0.01]
+
+                                vbm_candidates = occupied_states[occupied_states['DOS'] > threshold]
+                                if len(vbm_candidates) > 0:
+                                    vbm_energy = vbm_candidates['Energy'].max()
+                                else:
+                                    vbm_energy = None
+
+                                cbm_candidates = unoccupied_states[unoccupied_states['DOS'] > threshold]
                                 if len(cbm_candidates) > 0:
                                     cbm_energy = cbm_candidates['Energy'].min()
-                                    band_gap = cbm_energy - vbm_energy
+                                else:
+                                    cbm_energy = None
 
+                                if vbm_energy is not None and cbm_energy is not None:
+                                    band_gap = cbm_energy - vbm_energy
                                     st.warning(f"**Estimated Band Gap:** ~{band_gap:.3f} eV (approximate from DOS)")
                                     st.caption(
                                         "Note: This is a rough estimate. For accurate band gaps, use band structure calculations.")
@@ -1067,13 +1076,54 @@ if uploaded_files:
                     fermi_idx = np.argmin(np.abs(energies))
                     if spin_polarized:
                         dos_at_fermi = dos_data[fermi_idx] + dos_down_data[fermi_idx]
-                        st.metric("DOS at Fermi Level (total)", f"{dos_at_fermi:.3f} states/eV")
+                        total_dos = dos_data + dos_down_data
                     else:
                         dos_at_fermi = dos_data[fermi_idx]
-                        st.metric("DOS at Fermi Level", f"{dos_at_fermi:.3f} states/eV")
+                        total_dos = dos_data
+
+                    col_dos1, col_dos2 = st.columns(2)
+                    with col_dos1:
+                        if spin_polarized:
+                            st.metric("DOS at Fermi Level (total)", f"{dos_at_fermi:.3f} states/eV")
+                        else:
+                            st.metric("DOS at Fermi Level", f"{dos_at_fermi:.3f} states/eV")
 
                     if dos_at_fermi < 0.1:
-                        st.success("Low DOS at Fermi level suggests semiconducting/insulating behavior")
+                        occupied = energies < 0
+                        if np.any(occupied):
+                            occupied_dos = total_dos[occupied]
+                            occupied_energies = energies[occupied]
+                            threshold = 0.01 * np.max(total_dos)
+                            vbm_candidates = occupied_energies[occupied_dos > threshold]
+                            if len(vbm_candidates) > 0:
+                                vbm_energy = np.max(vbm_candidates)
+                            else:
+                                vbm_energy = None
+                        else:
+                            vbm_energy = None
+
+                        unoccupied = energies > 0
+                        if np.any(unoccupied):
+                            unoccupied_dos = total_dos[unoccupied]
+                            unoccupied_energies = energies[unoccupied]
+                            threshold = 0.01 * np.max(total_dos)
+                            cbm_candidates = unoccupied_energies[unoccupied_dos > threshold]
+                            if len(cbm_candidates) > 0:
+                                cbm_energy = np.min(cbm_candidates)
+                            else:
+                                cbm_energy = None
+                        else:
+                            cbm_energy = None
+
+                        if vbm_energy is not None and cbm_energy is not None:
+                            band_gap_dos = cbm_energy - vbm_energy
+                            with col_dos2:
+                                st.metric("Estimated Band Gap (from DOS)", f"{band_gap_dos:.3f} eV")
+                            st.success(f"Low DOS at Fermi level suggests semiconducting/insulating behavior")
+                            st.caption(
+                                "Note: DOS-based band gap is approximate. Use band structure for accurate values.")
+                        else:
+                            st.success("Low DOS at Fermi level suggests semiconducting/insulating behavior")
                     else:
                         st.info("Significant DOS at Fermi level indicates metallic character")
 
@@ -1222,13 +1272,19 @@ if uploaded_files:
                                 ))
 
                         if show_fermi_vasprun:
-                            fermi_level = 0.0 if shift_fermi_vasprun else efermi
+                            if shift_fermi_vasprun:
+                                fermi_level = 0.0
+                                annotation = "E_F = 0"
+                            else:
+                                fermi_level = efermi
+                                annotation = f"E_F = {efermi:.3f} eV"
+
                             fig_bands.add_hline(
                                 y=fermi_level,
                                 line_dash="dash",
                                 line_color="green",
                                 line_width=2,
-                                annotation_text="E_Fermi",
+                                annotation_text=annotation,
                                 annotation_position="right"
                             )
 
@@ -1267,33 +1323,49 @@ if uploaded_files:
                                 gridcolor='lightgray',
                                 range=y_range
                             ),
+                            width = 800,
                             height=600,
                             plot_bgcolor='white',
                             font=dict(size=16, color='black'),
                             hovermode='closest'
                         )
 
-                        st.plotly_chart(fig_bands, use_container_width=True)
+                        st.plotly_chart(fig_bands, use_container_width=False)
 
                         st.subheader("Band Gap Analysis")
 
-                        if band_structure.is_metal():
-                            st.info("Material is metallic (no band gap)")
+                        all_bands = band_structure.bands[Spin.up]
+
+                        if shift_fermi_vasprun:
+                            bands_for_gap = all_bands - efermi
+                            occupied_bands = bands_for_gap[bands_for_gap < 0]
+                            unoccupied_bands = bands_for_gap[bands_for_gap > 0]
                         else:
-                            band_gap = band_structure.get_band_gap()
+                            bands_for_gap = all_bands
+                            occupied_bands = bands_for_gap[bands_for_gap < efermi]
+                            unoccupied_bands = bands_for_gap[bands_for_gap > efermi]
+
+                        if len(occupied_bands) > 0 and len(unoccupied_bands) > 0:
+                            vbm = np.max(occupied_bands)
+                            cbm = np.min(unoccupied_bands)
+                            band_gap = cbm - vbm
+
                             col_gap1, col_gap2, col_gap3 = st.columns(3)
                             with col_gap1:
-                                st.metric("Band Gap", f"{band_gap['energy']:.4f} eV")
+                                st.metric("Valence Band Maximum (VBM)", f"{vbm:.4f} eV")
                             with col_gap2:
-                                st.metric("Direct Gap", "Yes" if band_gap['direct'] else "No")
+                                st.metric("Conduction Band Minimum (CBM)", f"{cbm:.4f} eV")
                             with col_gap3:
-                                transition = band_gap.get('transition', 'N/A')
-                                st.metric("Transition", str(transition))
+                                st.metric("Band Gap", f"{band_gap:.4f} eV")
 
-                            if band_gap['energy'] < 2.0:
-                                st.success(f"Semiconductor with band gap of {band_gap['energy']:.4f} eV")
+                            if band_gap < 0.1:
+                                st.info("Material appears to be metallic (no band gap)")
+                            elif band_gap < 2.0:
+                                st.success(f"Material is a semiconductor with band gap of {band_gap:.4f} eV")
                             else:
-                                st.success(f"Insulator with band gap of {band_gap['energy']:.4f} eV")
+                                st.success(f"Material is an insulator with band gap of {band_gap:.4f} eV")
+                        else:
+                            st.info("Cannot determine band gap - all bands may be partially occupied (metallic)")
 
                 except Exception as e:
                     st.error(f"Error processing band structure: {str(e)}")
@@ -1654,6 +1726,171 @@ if uploaded_files:
                     import traceback
 
                     st.error(traceback.format_exc())
+
+            tab_idx += 1
+        if eigenval_found:
+            with tabs[tab_idx]:
+                st.header("Electronic Band Structure")
+
+                try:
+                    kpoints, eigenvalues, k_distances, nbands, nkpts = parse_eigenval(eigenval_content)
+
+                    efermi_band = 0.0
+                    if doscar_found and doscar_content:
+                        try:
+                            _, efermi_band, _, _ = parse_doscar(doscar_content)
+                            st.info(f"Using Fermi energy from DOSCAR: {efermi_band:.4f} eV")
+                        except:
+                            st.warning("Could not extract Fermi energy from DOSCAR. Using 0 eV as reference.")
+                    else:
+                        st.warning("No DOSCAR file found. Using 0 eV as Fermi energy reference.")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.info(f"**Number of k-points:** {nkpts}")
+                    with col2:
+                        st.info(f"**Number of bands:** {nbands}")
+                    with col3:
+                        st.info(f"**Fermi Energy:** {efermi_band:.4f} eV")
+
+                    st.subheader("Band Structure Plot Options")
+
+                    col_opt1, col_opt2 = st.columns(2)
+                    with col_opt1:
+                        shift_fermi_band = st.checkbox("Shift Fermi level to 0 eV", value=True, key="shift_fermi_band")
+                        show_fermi_band = st.checkbox("Show Fermi level line", value=True, key="show_fermi_band")
+                    with col_opt2:
+                        energy_window = st.slider(
+                            "Energy window around Fermi (eV)",
+                            1.0, 20.0, 10.0, 0.5
+                        )
+
+                    eigenvalues_plot = eigenvalues.copy()
+                    if shift_fermi_band:
+                        eigenvalues_plot = eigenvalues_plot - efermi_band
+                        fermi_level = 0.0
+                        y_label = 'Energy - E_Fermi (eV)'
+                    else:
+                        fermi_level = efermi_band
+                        y_label = 'Energy (eV)'
+
+                    fig_bands = go.Figure()
+
+                    for iband in range(nbands):
+                        band_energies = eigenvalues_plot[:, iband]
+
+                        if shift_fermi_band:
+                            if np.min(band_energies) > energy_window or np.max(band_energies) < -energy_window:
+                                continue
+
+                        fig_bands.add_trace(go.Scatter(
+                            x=k_distances,
+                            y=band_energies,
+                            mode='lines',
+                            line=dict(color='blue', width=1),
+                            showlegend=False,
+                            hovertemplate=f'Band {iband + 1}<br>k-distance: %{{x:.3f}}<br>Energy: %{{y:.3f}} eV<extra></extra>'
+                        ))
+
+                    if show_fermi_band:
+                        fig_bands.add_hline(
+                            y=fermi_level,
+                            line_dash="dash",
+                            line_color="red",
+                            line_width=2,
+                            annotation_text="E_Fermi",
+                            annotation_position="right"
+                        )
+
+                    fig_bands.update_layout(
+                        title=dict(
+                            text="Electronic Band Structure (from vasprun.xml)",
+                            font=dict(size=24, color='black')
+                        ),
+                        xaxis=dict(
+                            title='k-path',
+                            title_font=dict(size=18, color='black'),
+                            tickfont=dict(size=16, color='black'),
+                            gridcolor='lightgray'
+                        ),
+                        yaxis=dict(
+                            title=y_label,
+                            title_font=dict(size=18, color='black'),
+                            tickfont=dict(size=16, color='black'),
+                            gridcolor='lightgray',
+                            range=[-energy_window, energy_window] if shift_fermi_band else None
+                        ),
+                        width=800,
+                        height=600,
+                        plot_bgcolor='white',
+                        font=dict(size=16, color='black'),
+                        hovermode='closest'
+                    )
+
+                    st.plotly_chart(fig_bands, use_container_width=False)
+
+                    st.subheader("Band Gap Analysis")
+
+                    if shift_fermi_band:
+                        occupied_bands = eigenvalues_plot[eigenvalues_plot < 0]
+                        unoccupied_bands = eigenvalues_plot[eigenvalues_plot > 0]
+
+                        if len(occupied_bands) > 0 and len(unoccupied_bands) > 0:
+                            vbm = np.max(occupied_bands)
+                            cbm = np.min(unoccupied_bands)
+                            band_gap = cbm - vbm
+
+                            col_gap1, col_gap2, col_gap3 = st.columns(3)
+                            with col_gap1:
+                                st.metric("Valence Band Maximum (VBM)", f"{vbm:.4f} eV")
+                            with col_gap2:
+                                st.metric("Conduction Band Minimum (CBM)", f"{cbm:.4f} eV")
+                            with col_gap3:
+                                st.metric("Band Gap", f"{band_gap:.4f} eV")
+
+                            if band_gap < 0.1:
+                                st.info("Material appears to be metallic (no band gap)")
+                            elif band_gap < 2.0:
+                                st.success(f"Material is a semiconductor with band gap of {band_gap:.4f} eV")
+                            else:
+                                st.success(f"Material is an insulator with band gap of {band_gap:.4f} eV")
+                        else:
+                            st.info("Cannot determine band gap - all bands may be partially occupied (metallic)")
+                    else:
+                        st.info("Enable 'Shift Fermi level to 0 eV' for automatic band gap analysis")
+
+                    st.subheader("Band Structure Data")
+
+                    band_data_sample = []
+                    for ik in range(min(10, nkpts)):
+                        for ib in range(min(5, nbands)):
+                            band_data_sample.append({
+                                'k-point': ik + 1,
+                                'Band': ib + 1,
+                                'Energy (eV)': eigenvalues[ik, ib]
+                            })
+
+                    df_bands = pd.DataFrame(band_data_sample)
+                    st.dataframe(df_bands, use_container_width=True)
+                    st.caption("Showing first 10 k-points and first 5 bands")
+
+                    csv_bands = pd.DataFrame({
+                        'k_distance': k_distances,
+                        **{f'band_{i + 1}': eigenvalues[:, i] for i in range(nbands)}
+                    })
+
+                    st.download_button(
+                        label="Download Band Structure Data (CSV)",
+                        data=csv_bands.to_csv(index=False),
+                        file_name="band_structure.csv",
+                        mime="text/csv",
+                        type='primary'
+
+                    )
+
+                except Exception as e:
+                    st.error(f"Error processing EIGENVAL file: {str(e)}")
+                    st.error("Please ensure your EIGENVAL file is in the correct VASP format.")
 
             tab_idx += 1
         if poscar_found or contcar_found:
@@ -2190,170 +2427,7 @@ if uploaded_files:
                     st.error(traceback.format_exc())
 
             tab_idx += 1
-        if eigenval_found:
-            with tabs[tab_idx]:
-                st.header("Electronic Band Structure")
 
-                try:
-                    kpoints, eigenvalues, k_distances, nbands, nkpts = parse_eigenval(eigenval_content)
-
-                    efermi_band = 0.0
-                    if doscar_found and doscar_content:
-                        try:
-                            _, efermi_band, _, _ = parse_doscar(doscar_content)
-                            st.info(f"Using Fermi energy from DOSCAR: {efermi_band:.4f} eV")
-                        except:
-                            st.warning("Could not extract Fermi energy from DOSCAR. Using 0 eV as reference.")
-                    else:
-                        st.warning("No DOSCAR file found. Using 0 eV as Fermi energy reference.")
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.info(f"**Number of k-points:** {nkpts}")
-                    with col2:
-                        st.info(f"**Number of bands:** {nbands}")
-                    with col3:
-                        st.info(f"**Fermi Energy:** {efermi_band:.4f} eV")
-
-                    st.subheader("Band Structure Plot Options")
-
-                    col_opt1, col_opt2 = st.columns(2)
-                    with col_opt1:
-                        shift_fermi_band = st.checkbox("Shift Fermi level to 0 eV", value=True, key="shift_fermi_band")
-                        show_fermi_band = st.checkbox("Show Fermi level line", value=True, key="show_fermi_band")
-                    with col_opt2:
-                        energy_window = st.slider(
-                            "Energy window around Fermi (eV)",
-                            1.0, 20.0, 10.0, 0.5
-                        )
-
-                    eigenvalues_plot = eigenvalues.copy()
-                    if shift_fermi_band:
-                        eigenvalues_plot = eigenvalues_plot - efermi_band
-                        fermi_level = 0.0
-                        y_label = 'Energy - E_Fermi (eV)'
-                    else:
-                        fermi_level = efermi_band
-                        y_label = 'Energy (eV)'
-
-                    fig_bands = go.Figure()
-
-                    for iband in range(nbands):
-                        band_energies = eigenvalues_plot[:, iband]
-
-                        if shift_fermi_band:
-                            if np.min(band_energies) > energy_window or np.max(band_energies) < -energy_window:
-                                continue
-
-                        fig_bands.add_trace(go.Scatter(
-                            x=k_distances,
-                            y=band_energies,
-                            mode='lines',
-                            line=dict(color='blue', width=1),
-                            showlegend=False,
-                            hovertemplate=f'Band {iband + 1}<br>k-distance: %{{x:.3f}}<br>Energy: %{{y:.3f}} eV<extra></extra>'
-                        ))
-
-                    if show_fermi_band:
-                        fig_bands.add_hline(
-                            y=fermi_level,
-                            line_dash="dash",
-                            line_color="red",
-                            line_width=2,
-                            annotation_text="E_Fermi",
-                            annotation_position="right"
-                        )
-
-                    fig_bands.update_layout(
-                        title=dict(
-                            text="Electronic Band Structure",
-                            font=dict(size=24, color='black')
-                        ),
-                        xaxis=dict(
-                            title='k-path',
-                            title_font=dict(size=18, color='black'),
-                            tickfont=dict(size=16, color='black'),
-                            gridcolor='lightgray'
-                        ),
-                        yaxis=dict(
-                            title=y_label,
-                            title_font=dict(size=18, color='black'),
-                            tickfont=dict(size=16, color='black'),
-                            gridcolor='lightgray',
-                            range=[-energy_window, energy_window] if shift_fermi_band else None
-                        ),
-                        height=600,
-                        plot_bgcolor='white',
-                        font=dict(size=16, color='black'),
-                        hovermode='closest'
-                    )
-
-                    st.plotly_chart(fig_bands, use_container_width=True)
-
-                    st.subheader("Band Gap Analysis")
-
-                    if shift_fermi_band:
-                        occupied_bands = eigenvalues_plot[eigenvalues_plot < 0]
-                        unoccupied_bands = eigenvalues_plot[eigenvalues_plot > 0]
-
-                        if len(occupied_bands) > 0 and len(unoccupied_bands) > 0:
-                            vbm = np.max(occupied_bands)
-                            cbm = np.min(unoccupied_bands)
-                            band_gap = cbm - vbm
-
-                            col_gap1, col_gap2, col_gap3 = st.columns(3)
-                            with col_gap1:
-                                st.metric("Valence Band Maximum (VBM)", f"{vbm:.4f} eV")
-                            with col_gap2:
-                                st.metric("Conduction Band Minimum (CBM)", f"{cbm:.4f} eV")
-                            with col_gap3:
-                                st.metric("Band Gap", f"{band_gap:.4f} eV")
-
-                            if band_gap < 0.1:
-                                st.info("Material appears to be metallic (no band gap)")
-                            elif band_gap < 2.0:
-                                st.success(f"Material is a semiconductor with band gap of {band_gap:.4f} eV")
-                            else:
-                                st.success(f"Material is an insulator with band gap of {band_gap:.4f} eV")
-                        else:
-                            st.info("Cannot determine band gap - all bands may be partially occupied (metallic)")
-                    else:
-                        st.info("Enable 'Shift Fermi level to 0 eV' for automatic band gap analysis")
-
-                    st.subheader("Band Structure Data")
-
-                    band_data_sample = []
-                    for ik in range(min(10, nkpts)):
-                        for ib in range(min(5, nbands)):
-                            band_data_sample.append({
-                                'k-point': ik + 1,
-                                'Band': ib + 1,
-                                'Energy (eV)': eigenvalues[ik, ib]
-                            })
-
-                    df_bands = pd.DataFrame(band_data_sample)
-                    st.dataframe(df_bands, use_container_width=True)
-                    st.caption("Showing first 10 k-points and first 5 bands")
-
-                    csv_bands = pd.DataFrame({
-                        'k_distance': k_distances,
-                        **{f'band_{i + 1}': eigenvalues[:, i] for i in range(nbands)}
-                    })
-
-                    st.download_button(
-                        label="Download Band Structure Data (CSV)",
-                        data=csv_bands.to_csv(index=False),
-                        file_name="band_structure.csv",
-                        mime="text/csv",
-                        type='primary'
-
-                    )
-
-                except Exception as e:
-                    st.error(f"Error processing EIGENVAL file: {str(e)}")
-                    st.error("Please ensure your EIGENVAL file is in the correct VASP format.")
-
-            tab_idx += 1
 
         if incar_found:
             with tabs[tab_idx]:
