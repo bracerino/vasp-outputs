@@ -1764,7 +1764,60 @@ if uploaded_files:
                         }
 
                         df_lattice = pd.DataFrame(lattice_data)
-                        st.dataframe(df_lattice, width='stretch')
+                        st.dataframe(df_lattice, use_container_width=True)
+
+                        params_to_plot = ['a', 'b', 'c', 'Volume']
+                        percent_changes = [
+                            ((contcar_struct.lattice.a - poscar_struct.lattice.a) / poscar_struct.lattice.a * 100),
+                            ((contcar_struct.lattice.b - poscar_struct.lattice.b) / poscar_struct.lattice.b * 100),
+                            ((contcar_struct.lattice.c - poscar_struct.lattice.c) / poscar_struct.lattice.c * 100),
+                            ((
+                                         contcar_struct.lattice.volume - poscar_struct.lattice.volume) / poscar_struct.lattice.volume * 100)
+                        ]
+
+                        fig_percent = go.Figure()
+
+                        fig_percent.add_trace(go.Bar(
+                            x=params_to_plot,
+                            y=percent_changes,
+                            marker_color='steelblue',
+                            text=[f"{v:+.3f}%" for v in percent_changes],
+                            textposition='outside',
+                            textfont=dict(size=18, color='black'),
+                            hovertemplate='%{x}<br>Change: %{y:.3f}%<extra></extra>'
+                        ))
+
+                        fig_percent.add_hline(
+                            y=0,
+                            line_dash="dash",
+                            line_color="gray",
+                            line_width=2
+                        )
+
+                        fig_percent.update_layout(
+                            title=dict(
+                                text="Percentage Change in Lattice Parameters (POSCAR → CONTCAR)",
+                                font=dict(size=24, color='black')
+                            ),
+                            xaxis=dict(
+                                title='Parameter',
+                                title_font=dict(size=20, color='black'),
+                                tickfont=dict(size=18, color='black')
+                            ),
+                            yaxis=dict(
+                                title='Change (%)',
+                                title_font=dict(size=20, color='black'),
+                                tickfont=dict(size=18, color='black'),
+                                gridcolor='lightgray',
+                                zeroline=True
+                            ),
+                            height=500,
+                            plot_bgcolor='white',
+                            font=dict(size=18),
+                            showlegend=False
+                        )
+
+                        st.plotly_chart(fig_percent, use_container_width=True)
 
                         if len(poscar_struct) == len(contcar_struct):
                             st.subheader("Atomic Displacements")
@@ -1799,17 +1852,37 @@ if uploaded_files:
                             fig_disp.add_trace(go.Scatter(
                                 y=displacements,
                                 mode='markers',
-                                marker=dict(size=8, color=displacements, colorscale='Viridis', showscale=True,
-                                            colorbar=dict(title="Displacement (Å)")),
+                                marker=dict(size=12, color=displacements, colorscale='Viridis', showscale=True,
+                                            colorbar=dict(
+                                                title="Displacement (Å)",
+                                                title_font=dict(size=18),
+                                                tickfont=dict(size=16),
+                                                thickness=20,
+                                                len=0.7
+                                            )),
                                 hovertemplate='Atom %{x}<br>Displacement: %{y:.4f} Å<extra></extra>'
                             ))
 
                             fig_disp.update_layout(
-                                title="Atomic Displacements",
-                                xaxis_title="Atom Index",
-                                yaxis_title="Displacement (Å)",
-                                height=400,
-                                plot_bgcolor='white'
+                                title=dict(
+                                    text="Atomic Displacements (POSCAR → CONTCAR)",
+                                    font=dict(size=24, color='black')
+                                ),
+                                xaxis=dict(
+                                    title='Atom Index',
+                                    title_font=dict(size=20, color='black'),
+                                    tickfont=dict(size=18, color='black'),
+                                    gridcolor='lightgray'
+                                ),
+                                yaxis=dict(
+                                    title='Displacement (Å)',
+                                    title_font=dict(size=20, color='black'),
+                                    tickfont=dict(size=18, color='black'),
+                                    gridcolor='lightgray'
+                                ),
+                                height=500,
+                                plot_bgcolor='white',
+                                font=dict(size=18, color='black')
                             )
 
                             st.plotly_chart(fig_disp, use_container_width=True)
