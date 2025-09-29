@@ -609,7 +609,7 @@ if uploaded_files:
                             font=dict(size=20, color='black')
                         )
 
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
 
                         st.subheader("Electronic Convergence Efficiency")
 
@@ -646,7 +646,7 @@ if uploaded_files:
                                     plot_bgcolor='white'
                                 )
 
-                                st.plotly_chart(fig_elec, use_container_width=True)
+                                st.plotly_chart(fig_elec, width='stretch')
 
                         with col_eff2:
                             if methods_used:
@@ -668,7 +668,7 @@ if uploaded_files:
                                     font=dict(size=12)
                                 )
 
-                                st.plotly_chart(fig_methods, use_container_width=True)
+                                st.plotly_chart(fig_methods, width='stretch')
 
                         st.subheader("Convergence Analysis Summary")
 
@@ -746,7 +746,7 @@ if uploaded_files:
                             lambda x: f"{x:.2E}" if x != float('inf') else "N/A"
                         )
 
-                        st.dataframe(df_display, use_container_width=True)
+                        st.dataframe(df_display, width='stretch')
 
                         csv_data = df.to_csv(index=False)
                         st.download_button(
@@ -943,10 +943,10 @@ if uploaded_files:
                         hovermode='x unified'
                     )
 
-                    st.plotly_chart(fig_dos, use_container_width=True)
+                    st.plotly_chart(fig_dos, width='stretch')
 
                     st.subheader("DOS Data")
-                    st.dataframe(dos_df_plot.head(50), use_container_width=True)
+                    st.dataframe(dos_df_plot.head(50), width='stretch')
 
                     csv_dos = dos_df_original.to_csv(index=False)
                     st.download_button(
@@ -1069,7 +1069,7 @@ if uploaded_files:
                         hovermode='x unified'
                     )
 
-                    st.plotly_chart(fig_dos, use_container_width=True)
+                    st.plotly_chart(fig_dos, width='stretch')
 
                     st.subheader("Electronic Structure Information")
 
@@ -1330,7 +1330,7 @@ if uploaded_files:
                             hovermode='closest'
                         )
 
-                        st.plotly_chart(fig_bands, use_container_width=False)
+                        st.plotly_chart(fig_bands, width='content')
 
                         st.subheader("Band Gap Analysis")
 
@@ -1468,7 +1468,7 @@ if uploaded_files:
                             font=dict(size=18, color='black')
                         )
 
-                        st.plotly_chart(fig_energy, use_container_width=True)
+                        st.plotly_chart(fig_energy, width='stretch')
 
                         if ionic_data['forces']:
                             st.subheader("Forces Convergence")
@@ -1506,7 +1506,7 @@ if uploaded_files:
                                 font=dict(size=18, color='black')
                             )
 
-                            st.plotly_chart(fig_forces, use_container_width=True)
+                            st.plotly_chart(fig_forces, width='stretch')
 
                         if ionic_data['structures']:
                             st.subheader("Lattice Evolution")
@@ -1580,7 +1580,7 @@ if uploaded_files:
                                 font=dict(size=18, color='black')
                             )
 
-                            st.plotly_chart(fig_lattice, use_container_width=True)
+                            st.plotly_chart(fig_lattice, width='stretch')
 
                             fig_volume = go.Figure()
 
@@ -1615,7 +1615,7 @@ if uploaded_files:
                                 font=dict(size=18, color='black')
                             )
 
-                            st.plotly_chart(fig_volume, use_container_width=True)
+                            st.plotly_chart(fig_volume, width='stretch')
 
                         st.subheader("Summary")
 
@@ -1710,7 +1710,7 @@ if uploaded_files:
                             convergence_data['Volume (ų)'] = volumes
 
                         st.subheader("Detailed Convergence Data")
-                        st.dataframe(convergence_data, use_container_width=True)
+                        st.dataframe(convergence_data, width='stretch')
 
                         csv_conv = convergence_data.to_csv(index=False)
                         st.download_button(
@@ -1827,7 +1827,7 @@ if uploaded_files:
                         hovermode='closest'
                     )
 
-                    st.plotly_chart(fig_bands, use_container_width=False)
+                    st.plotly_chart(fig_bands, width='content')
 
                     st.subheader("Band Gap Analysis")
 
@@ -1871,7 +1871,7 @@ if uploaded_files:
                             })
 
                     df_bands = pd.DataFrame(band_data_sample)
-                    st.dataframe(df_bands, use_container_width=True)
+                    st.dataframe(df_bands, width='stretch')
                     st.caption("Showing first 10 k-points and first 5 bands")
 
                     csv_bands = pd.DataFrame({
@@ -2001,7 +2001,7 @@ if uploaded_files:
                         }
 
                         df_lattice = pd.DataFrame(lattice_data)
-                        st.dataframe(df_lattice, use_container_width=True)
+                        st.dataframe(df_lattice, width='stretch')
 
                         params_to_plot = ['a', 'b', 'c', 'Volume']
                         percent_changes = [
@@ -2054,7 +2054,7 @@ if uploaded_files:
                             showlegend=False
                         )
 
-                        st.plotly_chart(fig_percent, use_container_width=True)
+                        st.plotly_chart(fig_percent, width='stretch')
 
                         if len(poscar_struct) == len(contcar_struct):
                             st.subheader("Atomic Displacements")
@@ -2122,7 +2122,7 @@ if uploaded_files:
                                 font=dict(size=18, color='black')
                             )
 
-                            st.plotly_chart(fig_disp, use_container_width=True)
+                            st.plotly_chart(fig_disp, width='stretch')
                         else:
                             st.warning("Structures have different number of atoms. Cannot calculate displacements.")
 
@@ -2338,7 +2338,7 @@ if uploaded_files:
                                     })
 
                                 df_poscar_atoms = pd.DataFrame(atom_data_poscar)
-                                st.dataframe(df_poscar_atoms, height=300, use_container_width=True)
+                                st.dataframe(df_poscar_atoms, height=300, width='stretch')
 
                             with col_table2:
                                 st.markdown("**CONTCAR Atoms**")
@@ -2362,7 +2362,7 @@ if uploaded_files:
                                     })
 
                                 df_contcar_atoms = pd.DataFrame(atom_data_contcar)
-                                st.dataframe(df_contcar_atoms, height=300, use_container_width=True)
+                                st.dataframe(df_contcar_atoms, height=300, width='stretch')
 
                     else:
                         struct_name = list(structures.keys())[0]
@@ -2418,7 +2418,7 @@ if uploaded_files:
                                 })
 
                             df_atoms = pd.DataFrame(atom_data)
-                            st.dataframe(df_atoms, height=400, use_container_width=True)
+                            st.dataframe(df_atoms, height=400, width='stretch')
 
                 except Exception as e:
                     st.error(f"Error loading structure: {str(e)}")
