@@ -1,6 +1,8 @@
 # VASP output files analysis with interactive online interface
 Online interface for quick VASP output files analysis.  
-Access the app here: https://vasp-outputs.streamlit.app/  
+**Access the app** here: https://vasp-outputs.streamlit.app/  
+**Tutorial** at [YouTube](https://www.youtube.com/watch?v=4-96LZoc_AU&feature=youtu.be).
+
 Upload OSZICAR, INCAR, DOSCAR, EIGENVAL, KPOINTS, POSCAR, CONTCAR, vasprun.xml to obtain convergence of total energy on the ionic step from geometry optimization, plot the eletronic band structure and density of states, or compare the differences between the initial and the optimized crystal structure.
 
 ![oszicar](images/1.png)
