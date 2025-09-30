@@ -415,7 +415,7 @@ uploaded_files = st.sidebar.file_uploader(
 
 st.sidebar.info(
         "🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. **[Tutorial here](https://youtu.be/4-96LZoc_AU)**. Spot a bug or have a feature idea? Let us know at: "
-        "**lebedmi2@cvut.cz**. To compile the app locally, visit our **[GitHub page](github.com/bracerino/vasp-outputs)**. If you like the app, please cite **[article in IUCr](https://journals.iucr.org/j/issues/2025/05/00/hat5006/index.html).** "
+        "**lebedmi2@cvut.cz**. To compile the app locally, visit our **[GitHub page](https://github.com/bracerino/vasp-outputs)**. If you like the app, please cite **[article in IUCr](https://journals.iucr.org/j/issues/2025/05/00/hat5006/index.html).** "
     )
 
 if uploaded_files:
