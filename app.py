@@ -72,6 +72,16 @@ css = '''
 
 st.markdown(css, unsafe_allow_html=True)
 
+
+def repair_incomplete_vasprun(content):
+    marker = "</calculation>"
+    idx = content.rfind(marker)
+    if idx == -1:
+        return None
+    repaired = content[: idx + len(marker)].rstrip()
+    repaired += "\n</modeling>\n"
+    return repaired
+
 def parse_vasprun_dos(vasprun_content):
     try:
         from pymatgen.io.vasp.outputs import Vasprun
@@ -79,27 +89,34 @@ def parse_vasprun_dos(vasprun_content):
         import tempfile
         import os
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
-            f.write(vasprun_content)
-            temp_path = f.name
+        def _parse(content):
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+                f.write(content)
+                temp_path = f.name
+            try:
+                vasprun = Vasprun(temp_path, parse_dos=True, parse_eigen=False)
+                complete_dos = vasprun.complete_dos
+                efermi = vasprun.efermi
+                energies = complete_dos.energies - efermi
+                if Spin.down in complete_dos.densities:
+                    return energies, complete_dos.densities[Spin.up], complete_dos.densities[
+                        Spin.down], efermi, True, complete_dos
+                else:
+                    return energies, complete_dos.densities[Spin.up], None, efermi, False, complete_dos
+            finally:
+                os.unlink(temp_path)
 
-        vasprun = Vasprun(temp_path, parse_dos=True, parse_eigen=False)
-        complete_dos = vasprun.complete_dos
-        efermi = vasprun.efermi
+        try:
+            result = _parse(vasprun_content)
+            return (*result, False)
+        except Exception:
+            pass
 
-        os.unlink(temp_path)
-
-        energies = complete_dos.energies - efermi
-
-        if Spin.down in complete_dos.densities:
-            spin_polarized = True
-            dos_up = complete_dos.densities[Spin.up]
-            dos_down = complete_dos.densities[Spin.down]
-            return energies, dos_up, dos_down, efermi, spin_polarized, complete_dos
-        else:
-            spin_polarized = False
-            dos = complete_dos.densities[Spin.up]
-            return energies, dos, None, efermi, spin_polarized, complete_dos
+        repaired = repair_incomplete_vasprun(vasprun_content)
+        if repaired is None:
+            raise ValueError("vasprun.xml is incomplete and no finished ionic step could be recovered.")
+        result = _parse(repaired)
+        return (*result, True)
 
     except Exception as e:
         raise ValueError(f"Error parsing vasprun.xml: {str(e)}")
@@ -113,48 +130,50 @@ def parse_vasprun_bands(vasprun_content, kpoints_content=None):
         import tempfile
         import os
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
-            f.write(vasprun_content)
-            vasprun_path = f.name
+        def _parse(content):
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+                f.write(content)
+                vasprun_path = f.name
 
-        kpoints_path = None
-        if kpoints_content:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='', delete=False) as f:
-                f.write(kpoints_content)
-                kpoints_path = f.name
+            kpoints_path = None
+            if kpoints_content:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='', delete=False) as f:
+                    f.write(kpoints_content)
+                    kpoints_path = f.name
 
-        vasprun = Vasprun(vasprun_path, parse_dos=False, parse_eigen=True)
-
-        efermi = vasprun.efermi
-        if efermi is None:
-            efermi = 0.0
+            try:
+                vasprun = Vasprun(vasprun_path, parse_dos=False, parse_eigen=True)
+                efermi = vasprun.efermi
+                if efermi is None:
+                    efermi = 0.0
+                try:
+                    if kpoints_path:
+                        band_structure = vasprun.get_band_structure(kpoints_filename=kpoints_path, line_mode=True,
+                                                                    efermi=efermi)
+                    else:
+                        band_structure = vasprun.get_band_structure(line_mode=True, efermi=efermi)
+                except:
+                    try:
+                        band_structure = vasprun.get_band_structure(line_mode=False, efermi=efermi)
+                    except Exception as e:
+                        raise ValueError(f"Could not parse band structure. Error: {str(e)}")
+                return band_structure, efermi
+            finally:
+                os.unlink(vasprun_path)
+                if kpoints_path:
+                    os.unlink(kpoints_path)
 
         try:
-            if kpoints_path:
-                band_structure = vasprun.get_band_structure(
-                    kpoints_filename=kpoints_path,
-                    line_mode=True,
-                    efermi=efermi
-                )
-            else:
-                band_structure = vasprun.get_band_structure(
-                    line_mode=True,
-                    efermi=efermi
-                )
-        except:
-            try:
-                band_structure = vasprun.get_band_structure(
-                    line_mode=False,
-                    efermi=efermi
-                )
-            except Exception as e:
-                raise ValueError(f"Could not parse band structure. Error: {str(e)}")
+            band_structure, efermi = _parse(vasprun_content)
+            return band_structure, efermi, False
+        except Exception:
+            pass
 
-        os.unlink(vasprun_path)
-        if kpoints_path:
-            os.unlink(kpoints_path)
-
-        return band_structure, efermi
+        repaired = repair_incomplete_vasprun(vasprun_content)
+        if repaired is None:
+            raise ValueError("vasprun.xml is incomplete and no finished ionic step could be recovered.")
+        band_structure, efermi = _parse(repaired)
+        return band_structure, efermi, True
 
     except Exception as e:
         raise ValueError(f"Error parsing band structure from vasprun.xml: {str(e)}")
@@ -166,40 +185,42 @@ def parse_vasprun_ionic_steps(vasprun_content):
         import tempfile
         import os
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
-            f.write(vasprun_content)
-            temp_path = f.name
+        def _parse(content):
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+                f.write(content)
+                temp_path = f.name
+            try:
+                vasprun = Vasprun(temp_path, parse_dos=False, parse_eigen=False)
+                ionic_steps_data = {'energies': [], 'forces': [], 'stresses': [], 'structures': []}
+                for ionic_step in vasprun.ionic_steps:
+                    ionic_steps_data['energies'].append(ionic_step['e_0_energy'])
+                    if 'forces' in ionic_step:
+                        forces = ionic_step['forces']
+                        max_force = np.max(np.linalg.norm(forces, axis=1))
+                        ionic_steps_data['forces'].append(max_force)
+                    if 'stress' in ionic_step:
+                        ionic_steps_data['stresses'].append(ionic_step['stress'])
+                    if 'structure' in ionic_step:
+                        ionic_steps_data['structures'].append(ionic_step['structure'])
+                return ionic_steps_data, vasprun.final_structure, vasprun.initial_structure
+            finally:
+                os.unlink(temp_path)
 
-        vasprun = Vasprun(temp_path, parse_dos=False, parse_eigen=False)
+        try:
+            ionic_steps_data, final_structure, initial_structure = _parse(vasprun_content)
+            return ionic_steps_data, final_structure, initial_structure, False
+        except Exception:
+            pass
 
-        ionic_steps_data = {
-            'energies': [],
-            'forces': [],
-            'stresses': [],
-            'structures': []
-        }
-
-        for ionic_step in vasprun.ionic_steps:
-            ionic_steps_data['energies'].append(ionic_step['e_0_energy'])
-
-            if 'forces' in ionic_step:
-                forces = ionic_step['forces']
-                max_force = np.max(np.linalg.norm(forces, axis=1))
-                ionic_steps_data['forces'].append(max_force)
-
-            if 'stress' in ionic_step:
-                stress = ionic_step['stress']
-                ionic_steps_data['stresses'].append(stress)
-
-            if 'structure' in ionic_step:
-                ionic_steps_data['structures'].append(ionic_step['structure'])
-
-        os.unlink(temp_path)
-
-        return ionic_steps_data, vasprun.final_structure, vasprun.initial_structure
+        repaired = repair_incomplete_vasprun(vasprun_content)
+        if repaired is None:
+            raise ValueError("vasprun.xml is incomplete and no finished ionic step could be recovered.")
+        ionic_steps_data, final_structure, initial_structure = _parse(repaired)
+        return ionic_steps_data, final_structure, initial_structure, True
 
     except Exception as e:
         raise ValueError(f"Error parsing ionic steps from vasprun.xml: {str(e)}")
+
 
 def parse_oszicar(oszicar_content):
     lines = oszicar_content.strip().split('\n')
@@ -1396,7 +1417,11 @@ if uploaded_files:
                 st.header("Ionic Relaxation from vasprun.xml")
 
                 try:
-                    ionic_data, final_structure, initial_structure = parse_vasprun_ionic_steps(vasprun_content)
+                    ionic_data, final_structure, initial_structure, _partial = parse_vasprun_ionic_steps(
+                        vasprun_content)
+                    if _partial:
+                        st.warning(
+                            "⚠️ Incomplete vasprun.xml — showing data recovered up to the last completed ionic step.")
 
                     num_steps = len(ionic_data['energies'])
 
