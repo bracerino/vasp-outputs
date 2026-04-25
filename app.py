@@ -1008,7 +1008,7 @@ if uploaded_files:
                 st.header("DOS from vasprun.xml (Pymatgen)")
 
                 try:
-                    energies, dos_data, dos_down_data, efermi, spin_polarized, complete_dos = parse_vasprun_dos(
+                    energies, dos_data, dos_down_data, efermi, spin_polarized, complete_dos, _was_repaired = parse_vasprun_dos(
                         vasprun_content)
 
                     col1, col2 = st.columns(2)
@@ -1197,10 +1197,10 @@ if uploaded_files:
 
                     if kpoints_found:
                         st.success("Using KPOINTS file for band structure path")
-                        band_structure, efermi = parse_vasprun_bands(vasprun_content, kpoints_content)
+                        band_structure, efermi, _was_repaired = parse_vasprun_bands(vasprun_content, kpoints_content)
                     else:
                         st.warning("No KPOINTS file provided. Attempting to extract from vasprun.xml...")
-                        band_structure, efermi = parse_vasprun_bands(vasprun_content)
+                        band_structure, efermi, _was_repaired = parse_vasprun_bands(vasprun_content)
 
                     num_kpoints = len(band_structure.kpoints)
 
