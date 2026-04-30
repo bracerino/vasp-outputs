@@ -300,8 +300,6 @@ def parse_incar_detailed(incar_content):
     return params
 
 
-
-
 def parse_incar(incar_content):
     ediff = 1E-4
 
@@ -318,42 +316,115 @@ def parse_incar(incar_content):
     return ediff
 
 
-def parse_doscar(doscar_content):
+PDOS_ORBITAL_COLS = {
+    (3,  True):  {'s': (1, 2)},
+    (9,  True):  {'s': (1, 2), 'py': (3, 4), 'pz': (5, 6), 'px': (7, 8)},
+    (19, True):  {'s': (1, 2), 'py': (3, 4), 'pz': (5, 6), 'px': (7, 8),
+                  'dxy': (9, 10), 'dxz': (11, 12), 'dz2': (13, 14),
+                  'dx2-y2': (15, 16), 'dyz': (17, 18)},
+    (33, True):  {'s': (1, 2), 'py': (3, 4), 'pz': (5, 6), 'px': (7, 8),
+                  'dxy': (9, 10), 'dxz': (11, 12), 'dz2': (13, 14),
+                  'dx2-y2': (15, 16), 'dyz': (17, 18),
+                  'fy3x2': (19, 20), 'fxyz': (21, 22), 'fyz2': (23, 24),
+                  'fz3': (25, 26), 'fxz2': (27, 28), 'fzx2': (29, 30), 'fx3': (31, 32)},
+    (2,  False): {'s': (1, None)},
+    (5,  False): {'s': (1, None), 'py': (2, None), 'pz': (3, None), 'px': (4, None)},
+    (10, False): {'s': (1, None), 'py': (2, None), 'pz': (3, None), 'px': (4, None),
+                  'dxy': (5, None), 'dxz': (6, None), 'dz2': (7, None),
+                  'dx2-y2': (8, None), 'dyz': (9, None)},
+}
+
+ORBITAL_GROUPS = {
+    'Total':    None,
+    's':        ['s'],
+    'p (all)':  ['py', 'pz', 'px'],
+    'py':       ['py'],
+    'pz':       ['pz'],
+    'px':       ['px'],
+    'd (all)':  ['dxy', 'dxz', 'dz2', 'dx2-y2', 'dyz'],
+    'dz2':      ['dz2'],
+    'dx2-y2':   ['dx2-y2'],
+    'dxy':      ['dxy'],
+    'dxz':      ['dxz'],
+    'dyz':      ['dyz'],
+}
+
+
+def parse_doscar_full(doscar_content):
     lines = doscar_content.strip().split('\n')
 
-    try:
-        header_parts = lines[0].split()
-        natoms = int(header_parts[0])
+    header_parts = lines[0].split()
+    natoms = int(header_parts[0])
 
-        header_line = lines[5].split()
-        emax = float(header_line[0])
-        emin = float(header_line[1])
-        nedos = int(header_line[2])
-        efermi = float(header_line[3])
+    header_line = lines[5].split()
+    emax   = float(header_line[0])
+    emin   = float(header_line[1])
+    nedos  = int(header_line[2])
+    efermi = float(header_line[3])
 
-        dos_data = []
-        start_line = 6
+    dos_data = []
+    for i in range(6, 6 + nedos):
+        dos_data.append([float(v) for v in lines[i].split()])
+    total_df = pd.DataFrame(dos_data)
 
-        for i in range(start_line, start_line + nedos):
-            if i < len(lines):
-                values = lines[i].split()
-                dos_data.append([float(v) for v in values])
+    ncols_total = total_df.shape[1]
+    if ncols_total == 5:
+        total_df.columns = ['Energy', 'DOS_up', 'DOS_down', 'Int_DOS_up', 'Int_DOS_down']
+        spin_polarized = True
+    elif ncols_total == 3:
+        total_df.columns = ['Energy', 'DOS', 'Integrated_DOS']
+        spin_polarized = False
+    else:
+        raise ValueError(f"Unexpected total DOS columns: {ncols_total}")
 
-        df = pd.DataFrame(dos_data)
+    atom_pdos   = []
+    orbital_map = None
 
-        if df.shape[1] == 5:
-            df.columns = ['Energy', 'DOS_up', 'DOS_down', 'Int_DOS_up', 'Int_DOS_down']
-            spin_polarized = True
-        elif df.shape[1] == 3:
-            df.columns = ['Energy', 'DOS', 'Integrated_DOS']
-            spin_polarized = False
-        else:
-            raise ValueError(f"Unexpected number of columns in DOSCAR: {df.shape[1]}")
+    current_line = 6 + nedos
+    for atom_idx in range(natoms):
+        if current_line >= len(lines):
+            break
+        current_line += 1
 
-        return df, efermi, spin_polarized, natoms
+        pdos_rows = []
+        for _ in range(nedos):
+            if current_line >= len(lines):
+                break
+            pdos_rows.append([float(v) for v in lines[current_line].split()])
+            current_line += 1
 
-    except Exception as e:
-        raise ValueError(f"Error parsing DOSCAR: {str(e)}")
+        df_atom = pd.DataFrame(pdos_rows)
+        ncols_pdos = df_atom.shape[1]
+
+        if orbital_map is None:
+            orbital_map = PDOS_ORBITAL_COLS.get((ncols_pdos, spin_polarized), {})
+
+        atom_pdos.append(df_atom)
+
+    if orbital_map is None:
+        orbital_map = {}
+
+    return total_df, efermi, spin_polarized, natoms, atom_pdos, orbital_map
+
+
+def get_orbital_dos(df_atom, orbital_name, orbital_map, spin='up'):
+    if orbital_name not in orbital_map:
+        return None
+    col_up, col_down = orbital_map[orbital_name]
+    if spin == 'up' or col_down is None:
+        return df_atom.iloc[:, col_up].values
+    else:
+        return df_atom.iloc[:, col_down].values
+
+
+def sum_orbital_group(atom_pdos_list, orbital_names, orbital_map, spin='up'):
+    result = None
+    for df in atom_pdos_list:
+        for orb in orbital_names:
+            arr = get_orbital_dos(df, orb, orbital_map, spin)
+            if arr is not None:
+                result = arr if result is None else result + arr
+    return result
 
 
 def parse_eigenval(eigenval_content):
@@ -449,7 +520,6 @@ if uploaded_files:
     doscar_found = False
     eigenval_found = False
 
-    #
     vasprun_content = None
     vasprun_found = False
 
@@ -806,9 +876,12 @@ if uploaded_files:
         if doscar_found:
             with tabs[tab_idx]:
                 st.header("Density of States (DOS) Analysis")
-
                 try:
-                    dos_df, efermi, spin_polarized, natoms = parse_doscar(doscar_content)
+                    total_df, efermi, spin_polarized, natoms, atom_pdos, orbital_map = \
+                        parse_doscar_full(doscar_content)
+
+                    has_pdos = len(atom_pdos) > 0
+                    available_orbitals = list(orbital_map.keys())
 
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -817,189 +890,385 @@ if uploaded_files:
                         st.info(f"**Number of Atoms:** {natoms}")
                     with col3:
                         st.info(f"**Spin Polarized:** {'Yes' if spin_polarized else 'No'}")
+                    if has_pdos:
+                        st.info(f"**PDOS available:** orbitals — {', '.join(available_orbitals)}")
 
-                    st.subheader("Electronic Structure Analysis")
+                    st.subheader("Plot Options")
+                    col_o1, col_o2 = st.columns(2)
+                    with col_o1:
+                        shift_fermi = st.checkbox("Shift Fermi level to 0 eV", value=True, key="dos_shift")
+                        show_fermi_line = st.checkbox("Show Fermi level line", value=True, key="dos_fermi")
+                    with col_o2:
+                        emin_plot = float(total_df['Energy'].min())
+                        emax_plot = float(total_df['Energy'].max())
+                        energy_range = st.slider("Energy range (eV)", emin_plot, emax_plot,
+                                                 (emin_plot, emax_plot), key="dos_erange")
 
-                    if spin_polarized:
-                        dos_at_fermi_up = dos_df.iloc[(dos_df['Energy'] - efermi).abs().argsort()[0]]['DOS_up']
-                        dos_at_fermi_down = dos_df.iloc[(dos_df['Energy'] - efermi).abs().argsort()[0]]['DOS_down']
-                        dos_at_fermi_total = dos_at_fermi_up + dos_at_fermi_down
+                    fermi_ref  = efermi if shift_fermi else 0.0
+                    x_label    = 'Energy − E_F (eV)' if shift_fermi else 'Energy (eV)'
+                    fermi_line = 0.0 if shift_fermi else efermi
 
-                        total_electrons_up = dos_df[dos_df['Energy'] <= efermi]['DOS_up'].sum() * (
-                                    dos_df['Energy'].iloc[1] - dos_df['Energy'].iloc[0])
-                        total_electrons_down = dos_df[dos_df['Energy'] <= efermi]['DOS_down'].sum() * (
-                                    dos_df['Energy'].iloc[1] - dos_df['Energy'].iloc[0])
+                    dos_tab, pdos_tab = st.tabs(["📊 Total DOS", "🔬 Per-Atom PDOS"])
 
-                        magnetic_moment = total_electrons_up - total_electrons_down
+                    with dos_tab:
+                        plot_df = total_df.copy()
+                        plot_df['Energy'] = plot_df['Energy'] - fermi_ref
+                        mask = (plot_df['Energy'] >= energy_range[0] - fermi_ref) & \
+                               (plot_df['Energy'] <= energy_range[1] - fermi_ref)
+                        plot_df = plot_df[mask]
 
-                        col_a1, col_a2, col_a3 = st.columns(3)
-                        with col_a1:
-                            st.metric("DOS at E_F (total)", f"{dos_at_fermi_total:.3f} states/eV")
-                        with col_a2:
-                            st.metric("DOS at E_F (spin-up)", f"{dos_at_fermi_up:.3f} states/eV")
-                        with col_a3:
-                            st.metric("DOS at E_F (spin-down)", f"{dos_at_fermi_down:.3f} states/eV")
-
-                        st.info(f"**Magnetic Moment:** ~{magnetic_moment:.2f} μB (approximate from DOS integration)")
-
-                        if dos_at_fermi_total < 0.1:
-                            st.success("Low DOS at Fermi level suggests semiconducting or insulating behavior")
+                        fig_dos = go.Figure()
+                        if spin_polarized:
+                            fig_dos.add_trace(go.Scatter(x=plot_df['Energy'], y=plot_df['DOS_up'],
+                                name='Spin Up', mode='lines',
+                                line=dict(width=2, color='blue'), fill='tozeroy'))
+                            fig_dos.add_trace(go.Scatter(x=plot_df['Energy'], y=-plot_df['DOS_down'],
+                                name='Spin Down', mode='lines',
+                                line=dict(width=2, color='red'), fill='tozeroy'))
                         else:
-                            st.info("Significant DOS at Fermi level indicates metallic character")
+                            fig_dos.add_trace(go.Scatter(x=plot_df['Energy'], y=plot_df['DOS'],
+                                name='Total DOS', mode='lines',
+                                line=dict(width=2, color='blue'), fill='tozeroy'))
 
-                    else:
-                        dos_at_fermi = dos_df.iloc[(dos_df['Energy'] - efermi).abs().argsort()[0]]['DOS']
+                        if show_fermi_line:
+                            fig_dos.add_vline(x=fermi_line, line_dash="dash", line_color="green",
+                                              line_width=2, annotation_text="E_F",
+                                              annotation_position="top")
+                        fig_dos.update_layout(
+                            title=dict(text="Total Density of States", font=dict(size=22, color='black')),
+                            xaxis=dict(title=x_label, title_font=dict(size=18), tickfont=dict(size=16), gridcolor='lightgray'),
+                            yaxis=dict(title='DOS (states/eV)', title_font=dict(size=18), tickfont=dict(size=16), gridcolor='lightgray'),
+                            legend=dict(font=dict(size=14)), height=550,
+                            plot_bgcolor='white', hovermode='x unified')
+                        st.plotly_chart(fig_dos)
 
-                        st.metric("DOS at Fermi Level", f"{dos_at_fermi:.3f} states/eV")
+                        csv_dos = total_df.to_csv(index=False)
+                        st.download_button("Download Total DOS (CSV)", csv_dos,
+                                           "total_dos.csv", "text/csv", type='primary')
 
-                        if dos_at_fermi < 0.1:
-                            st.success("Low DOS at Fermi level suggests semiconducting or insulating behavior")
-
-                            occupied_states = dos_df[dos_df['Energy'] < efermi]
-                            unoccupied_states = dos_df[dos_df['Energy'] > efermi]
-
-                            if len(occupied_states) > 0 and len(unoccupied_states) > 0:
-                                threshold = 0.01 * dos_df['DOS'].max()
-
-
-                                vbm_candidates = occupied_states[occupied_states['DOS'] > threshold]
-                                if len(vbm_candidates) > 0:
-                                    vbm_energy = vbm_candidates['Energy'].max()
-                                else:
-                                    vbm_energy = None
-
-                                cbm_candidates = unoccupied_states[unoccupied_states['DOS'] > threshold]
-                                if len(cbm_candidates) > 0:
-                                    cbm_energy = cbm_candidates['Energy'].min()
-                                else:
-                                    cbm_energy = None
-
-                                if vbm_energy is not None and cbm_energy is not None:
-                                    band_gap = cbm_energy - vbm_energy
-                                    st.warning(f"**Estimated Band Gap:** ~{band_gap:.3f} eV (approximate from DOS)")
-                                    st.caption(
-                                        "Note: This is a rough estimate. For accurate band gaps, use band structure calculations.")
+                    with pdos_tab:
+                        if not has_pdos:
+                            st.warning("No per-atom PDOS blocks found in this DOSCAR.")
                         else:
-                            st.info("Significant DOS at Fermi level indicates metallic character")
+                            st.markdown("### Atom Group Setup")
+                            st.caption(
+                                "Assign a label to each atom (e.g. Mn2+, Mn3+, O). "
+                                "Atoms with the same label will be summed together in the plot.")
 
-                    st.subheader("DOS Plot Options")
+                            col_qf1, col_qf2, col_qf3 = st.columns([2, 1, 1])
+                            with col_qf1:
+                                range_str = st.text_input(
+                                    "Quick-fill: atom range (e.g. 1-4)",
+                                    placeholder="1-4", key="pdos_qf_range")
+                            with col_qf2:
+                                range_label = st.text_input("Label for that range",
+                                                            placeholder="Mn2+", key="pdos_qf_label")
+                            with col_qf3:
+                                st.markdown("<br>", unsafe_allow_html=True)
+                                apply_fill = st.button("Apply", key="pdos_apply_fill")
 
-                    col_opt1, col_opt2 = st.columns(2)
-                    with col_opt1:
-                        shift_fermi = st.checkbox("Shift Fermi level to 0 eV", value=True)
-                        show_fermi_line = st.checkbox("Show Fermi level line", value=True)
-                    with col_opt2:
-                        energy_range = st.slider(
-                            "Energy range (eV)",
-                            float(dos_df['Energy'].min()),
-                            float(dos_df['Energy'].max()),
-                            (float(dos_df['Energy'].min()), float(dos_df['Energy'].max()))
-                        )
+                            auto_labels = None
+                            struct_content = contcar_content if contcar_found else (poscar_content if poscar_found else None)
+                            if struct_content is not None:
+                                try:
+                                    struct_lines = struct_content.strip().split('\n')
+                                    elem_syms   = struct_lines[5].split()
+                                    elem_counts = [int(x) for x in struct_lines[6].split()]
+                                    auto_labels = []
+                                    for sym, cnt in zip(elem_syms, elem_counts):
+                                        for i in range(cnt):
+                                            auto_labels.append(f"{sym}{i+1}")
+                                    if len(auto_labels) != natoms:
+                                        auto_labels = None
+                                except Exception:
+                                    auto_labels = None
 
-                    dos_df_original = dos_df.copy()
+                            if auto_labels is not None:
+                                st.session_state['atom_labels'] = auto_labels
+                                for i, lbl in enumerate(auto_labels):
+                                    st.session_state[f'atom_lbl_{i}'] = lbl
+                            elif 'atom_labels' not in st.session_state or \
+                                 len(st.session_state['atom_labels']) != natoms:
+                                st.session_state['atom_labels'] = [f"Atom {i+1}" for i in range(natoms)]
 
-                    if shift_fermi:
-                        dos_df['Energy'] = dos_df['Energy'] - efermi
-                        fermi_position = 0.0
-                        x_label = 'Energy - E_Fermi (eV)'
-                    else:
-                        fermi_position = efermi
-                        x_label = 'Energy (eV)'
+                            if apply_fill and range_str and range_label:
+                                try:
+                                    parts = range_str.split('-')
+                                    lo, hi = int(parts[0]) - 1, int(parts[1]) - 1
+                                    for i in range(lo, min(hi + 1, natoms)):
+                                        st.session_state['atom_labels'][i] = range_label
+                                        st.session_state[f'atom_lbl_{i}'] = range_label
+                                except Exception:
+                                    st.error("Invalid range format. Use e.g. 1-4")
 
-                    mask = (dos_df['Energy'] >= energy_range[0] - (efermi if shift_fermi else 0)) & \
-                           (dos_df['Energy'] <= energy_range[1] - (efermi if shift_fermi else 0))
-                    dos_df_plot = dos_df[mask]
+                            with st.expander("✏️ Edit individual atom labels", expanded=False):
+                                cols_per_row = 5
+                                rows = [list(range(natoms))[i:i+cols_per_row]
+                                        for i in range(0, natoms, cols_per_row)]
+                                for row in rows:
+                                    cols = st.columns(cols_per_row)
+                                    for j, atom_idx in enumerate(row):
+                                        st.session_state['atom_labels'][atom_idx] = cols[j].text_input(
+                                            f"Atom {atom_idx+1}",
+                                            value=st.session_state['atom_labels'][atom_idx],
+                                            key=f"atom_lbl_{atom_idx}")
 
-                    fig_dos = go.Figure()
+                            atom_labels = st.session_state['atom_labels']
 
-                    if spin_polarized:
-                        if 'DOS_up' in dos_df_plot.columns and 'DOS_down' in dos_df_plot.columns:
-                            fig_dos.add_trace(go.Scatter(
-                                x=dos_df_plot['Energy'],
-                                y=dos_df_plot['DOS_up'],
-                                name='Spin Up',
-                                mode='lines',
-                                line=dict(width=2, color='blue'),
-                                fill='tozeroy'
-                            ))
+                            st.markdown("### Orbital & Display Options")
+                            col_orb1, col_orb2, col_orb3 = st.columns(3)
 
-                            fig_dos.add_trace(go.Scatter(
-                                x=dos_df_plot['Energy'],
-                                y=-dos_df_plot['DOS_down'],
-                                name='Spin Down',
-                                mode='lines',
-                                line=dict(width=2, color='red'),
-                                fill='tozeroy'
-                            ))
-                            y_label = 'DOS (states/eV)'
-                    else:
-                        fig_dos.add_trace(go.Scatter(
-                            x=dos_df_plot['Energy'],
-                            y=dos_df_plot['DOS'],
-                            name='Total DOS',
-                            mode='lines',
-                            line=dict(width=2, color='blue'),
-                            fill='tozeroy'
-                        ))
-                        y_label = 'DOS (states/eV)'
+                            avail_groups = []
+                            for grp_name, orb_list in ORBITAL_GROUPS.items():
+                                if orb_list is None:
+                                    avail_groups.append(grp_name)
+                                elif any(o in available_orbitals for o in orb_list):
+                                    avail_groups.append(grp_name)
 
-                    if show_fermi_line:
-                        fig_dos.add_vline(
-                            x=fermi_position,
-                            line_dash="dash",
-                            line_color="green",
-                            line_width=2,
-                            annotation_text="E_Fermi" if not shift_fermi else "E_F = 0",
-                            annotation_position="top"
-                        )
+                            with col_orb1:
+                                selected_orb_groups = st.multiselect(
+                                    "Orbitals to plot",
+                                    avail_groups,
+                                    default=['d (all)'] if 'dz2' in available_orbitals else
+                                            ['p (all)'] if 'py' in available_orbitals else ['s'],
+                                    key="pdos_orb_sel")
 
-                    fig_dos.update_layout(
-                        title=dict(
-                            text="Density of States",
-                            font=dict(size=24, color='black')
-                        ),
-                        xaxis=dict(
-                            title=x_label,
-                            title_font=dict(size=18, color='black'),
-                            tickfont=dict(size=16, color='black'),
-                            gridcolor='lightgray'
-                        ),
-                        yaxis=dict(
-                            title=y_label,
-                            title_font=dict(size=18, color='black'),
-                            tickfont=dict(size=16, color='black'),
-                            gridcolor='lightgray'
-                        ),
-                        legend=dict(
-                            x=0.02,
-                            y=0.98,
-                            bgcolor='rgba(255,255,255,0.8)',
-                            borderwidth=1,
-                            font=dict(size=14)
-                        ),
-                        height=600,
-                        plot_bgcolor='white',
-                        font=dict(size=16, color='black'),
-                        hovermode='x unified'
-                    )
+                            with col_orb2:
+                                plot_mode = st.radio("Plot mode",
+                                    ["By group (summed)", "Individual atoms", "🎯 Custom selection"],
+                                    key="pdos_plot_mode")
 
-                    st.plotly_chart(fig_dos, width='stretch')
+                            with col_orb3:
+                                if spin_polarized:
+                                    spin_sel = st.radio("Spin channel",
+                                        ["Both (↑ pos / ↓ neg)", "Spin Up only", "Spin Down only"],
+                                        key="pdos_spin")
+                                else:
+                                    spin_sel = "Both (↑ pos / ↓ neg)"
 
-                    st.subheader("DOS Data")
-                    st.dataframe(dos_df_plot.head(50), width='stretch')
+                            def resolve_orbs(grp_name):
+                                orb_list = ORBITAL_GROUPS[grp_name]
+                                if orb_list is None:
+                                    return [o for o in available_orbitals]
+                                return [o for o in orb_list if o in available_orbitals]
 
-                    csv_dos = dos_df_original.to_csv(index=False)
-                    st.download_button(
-                        label="Download DOS Data (CSV)",
-                        data=csv_dos,
-                        file_name="dos_data.csv",
-                        mime="text/csv",
-                        type='primary'
-                    )
+                            PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
+                                       '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
+
+                            energies_plot = atom_pdos[0].iloc[:, 0].values - fermi_ref
+                            e_mask = (energies_plot >= energy_range[0] - fermi_ref) & \
+                                     (energies_plot <= energy_range[1] - fermi_ref)
+                            en = energies_plot[e_mask]
+
+                            if plot_mode == "🎯 Custom selection":
+                                st.markdown("### Custom Trace Builder")
+                                st.caption("Select an atom and orbital, then click **Add to plot**. Repeat for each trace you want. Orbitals marked ⬜ are all zeros for that atom.")
+
+                                atom_options = [f"{i+1}: {lbl}" for i, lbl in enumerate(atom_labels)]
+
+                                cs_row1_col1, cs_row1_col2 = st.columns([3, 3])
+                                with cs_row1_col1:
+                                    cs_atom = st.selectbox("Atom", atom_options, key="cs_atom")
+
+                                cs_atom_idx = atom_options.index(cs_atom)
+                                cs_df_atom = atom_pdos[cs_atom_idx]
+
+                                def orb_is_zero(orb_name):
+                                    arr_up = get_orbital_dos(cs_df_atom, orb_name, orbital_map, 'up')
+                                    arr_dn = get_orbital_dos(cs_df_atom, orb_name, orbital_map, 'down')
+                                    up_zero = arr_up is None or np.allclose(arr_up, 0)
+                                    dn_zero = arr_dn is None or np.allclose(arr_dn, 0)
+                                    return up_zero and dn_zero
+
+                                orbital_options = [
+                                    f"{orb} ⬜" if orb_is_zero(orb) else orb
+                                    for orb in available_orbitals
+                                ]
+                                orb_display_to_name = {
+                                    (f"{orb} ⬜" if orb_is_zero(orb) else orb): orb
+                                    for orb in available_orbitals
+                                }
+
+                                cs_col2, cs_col3, cs_col4 = st.columns([2, 2, 1])
+                                with cs_col2:
+                                    cs_orb_display = st.selectbox("Orbital", orbital_options, key="cs_orb")
+                                    cs_orb = orb_display_to_name[cs_orb_display]
+                                with cs_col3:
+                                    if spin_polarized:
+                                        cs_spin = st.selectbox("Spin", ["Up ↑", "Down ↓"], key="cs_spin")
+                                    else:
+                                        cs_spin = "Up ↑"
+                                        st.selectbox("Spin", ["Up ↑"], key="cs_spin", disabled=True)
+                                with cs_col4:
+                                    st.markdown("<br>", unsafe_allow_html=True)
+                                    add_trace_btn = st.button("➕ Add", key="cs_add")
+
+                                if 'custom_traces' not in st.session_state:
+                                    st.session_state['custom_traces'] = []
+
+                                if add_trace_btn:
+                                    spin_key = 'up' if cs_spin == "Up ↑" else 'down'
+                                    arr = get_orbital_dos(atom_pdos[cs_atom_idx], cs_orb, orbital_map, spin_key)
+                                    if arr is not None:
+                                        sign = 1 if spin_key == 'up' else -1
+                                        lbl = atom_labels[cs_atom_idx]
+                                        trace_name = f"{lbl} {cs_orb} {cs_spin}"
+                                        st.session_state['custom_traces'].append({
+                                            'name': trace_name,
+                                            'y': (sign * arr[e_mask]).tolist(),
+                                            'color': PALETTE[len(st.session_state['custom_traces']) % len(PALETTE)],
+                                            'dash': 'solid' if spin_key == 'up' else 'dash',
+                                        })
+
+                                if st.session_state['custom_traces']:
+                                    col_clr, col_info = st.columns([1, 4])
+                                    with col_clr:
+                                        if st.button("🗑️ Clear all traces", key="cs_clear"):
+                                            st.session_state['custom_traces'] = []
+                                            st.rerun()
+                                    with col_info:
+                                        st.caption(f"{len(st.session_state['custom_traces'])} trace(s) in plot: " +
+                                                   " | ".join(t['name'] for t in st.session_state['custom_traces']))
+
+                                    fig_pdos = go.Figure()
+                                    for tr in st.session_state['custom_traces']:
+                                        fig_pdos.add_trace(go.Scatter(
+                                            x=en, y=tr['y'],
+                                            name=tr['name'],
+                                            mode='lines',
+                                            line=dict(width=2, color=tr['color'], dash=tr['dash'])))
+
+                                    if show_fermi_line:
+                                        fig_pdos.add_vline(x=fermi_line, line_dash="dash",
+                                                           line_color="green", line_width=2,
+                                                           annotation_text="E_F", annotation_position="top")
+
+                                    fig_pdos.update_layout(
+                                        title=dict(text="PDOS — Custom selection", font=dict(size=26, color='black')),
+                                        xaxis=dict(title=x_label, title_font=dict(size=22),
+                                                   tickfont=dict(size=20), gridcolor='lightgray'),
+                                        yaxis=dict(title='PDOS (states/eV)', title_font=dict(size=22),
+                                                   tickfont=dict(size=20), gridcolor='lightgray'),
+                                        legend=dict(font=dict(size=16),
+                                                    x=1.01, y=1, xanchor='left',
+                                                    bgcolor='rgba(255,255,255,0.8)', borderwidth=1),
+                                        height=580, plot_bgcolor='white', hovermode='x unified')
+
+                                    st.plotly_chart(fig_pdos)
+
+                                    st.markdown("**Remove individual traces:**")
+                                    remove_idx = None
+                                    for ti, tr in enumerate(st.session_state['custom_traces']):
+                                        r_col1, r_col2 = st.columns([1, 8])
+                                        with r_col1:
+                                            if st.button("✖", key=f"cs_remove_{ti}"):
+                                                remove_idx = ti
+                                        with r_col2:
+                                            st.markdown(
+                                                f"<span style='color:{tr['color']}; font-size:15px;'>■</span> {tr['name']}",
+                                                unsafe_allow_html=True)
+                                    if remove_idx is not None:
+                                        st.session_state['custom_traces'].pop(remove_idx)
+                                        st.rerun()
+                                else:
+                                    st.info("No traces added yet. Use the controls above to build your plot.")
+
+                            elif not selected_orb_groups:
+                                st.info("Select at least one orbital group above.")
+                            else:
+                                unique_groups = list(dict.fromkeys(atom_labels))
+
+                                fig_pdos = go.Figure()
+
+                                if plot_mode == "By group (summed)":
+                                    for gi, grp in enumerate(unique_groups):
+                                        grp_atoms = [atom_pdos[i] for i, lbl in enumerate(atom_labels)
+                                                     if lbl == grp]
+                                        color = PALETTE[gi % len(PALETTE)]
+
+                                        for orb_grp in selected_orb_groups:
+                                            orbs = resolve_orbs(orb_grp)
+                                            if not orbs:
+                                                continue
+                                            suffix = f" [{orb_grp}]" if len(selected_orb_groups) > 1 else ""
+
+                                            if spin_sel in ("Both (↑ pos / ↓ neg)", "Spin Up only"):
+                                                arr_up = sum_orbital_group(grp_atoms, orbs, orbital_map, 'up')
+                                                if arr_up is not None:
+                                                    fig_pdos.add_trace(go.Scatter(
+                                                        x=en, y=arr_up[e_mask],
+                                                        name=f"{grp}{suffix} ↑",
+                                                        mode='lines', fill='tozeroy',
+                                                        line=dict(width=2, color=color),
+                                                        opacity=0.85))
+
+                                            if spin_polarized and spin_sel in ("Both (↑ pos / ↓ neg)", "Spin Down only"):
+                                                arr_dn = sum_orbital_group(grp_atoms, orbs, orbital_map, 'down')
+                                                if arr_dn is not None:
+                                                    fig_pdos.add_trace(go.Scatter(
+                                                        x=en, y=-arr_dn[e_mask],
+                                                        name=f"{grp}{suffix} ↓",
+                                                        mode='lines', fill='tozeroy',
+                                                        line=dict(width=2, color=color, dash='dash'),
+                                                        opacity=0.60))
+
+                                else:
+                                    for ai, (df_at, lbl) in enumerate(zip(atom_pdos, atom_labels)):
+                                        color = PALETTE[ai % len(PALETTE)]
+                                        for orb_grp in selected_orb_groups:
+                                            orbs = resolve_orbs(orb_grp)
+                                            suffix = f" [{orb_grp}]" if len(selected_orb_groups) > 1 else ""
+
+                                            if spin_sel in ("Both (↑ pos / ↓ neg)", "Spin Up only"):
+                                                arr_up = sum_orbital_group([df_at], orbs, orbital_map, 'up')
+                                                if arr_up is not None:
+                                                    fig_pdos.add_trace(go.Scatter(
+                                                        x=en, y=arr_up[e_mask],
+                                                        name=f"Atom {ai+1} ({lbl}){suffix} ↑",
+                                                        mode='lines',
+                                                        line=dict(width=1.5, color=color)))
+
+                                            if spin_polarized and spin_sel in ("Both (↑ pos / ↓ neg)", "Spin Down only"):
+                                                arr_dn = sum_orbital_group([df_at], orbs, orbital_map, 'down')
+                                                if arr_dn is not None:
+                                                    fig_pdos.add_trace(go.Scatter(
+                                                        x=en, y=-arr_dn[e_mask],
+                                                        name=f"Atom {ai+1} ({lbl}){suffix} ↓",
+                                                        mode='lines',
+                                                        line=dict(width=1.5, color=color, dash='dash')))
+
+                                if show_fermi_line:
+                                    fig_pdos.add_vline(x=fermi_line, line_dash="dash",
+                                                       line_color="green", line_width=2,
+                                                       annotation_text="E_F", annotation_position="top")
+
+                                orb_title = ", ".join(selected_orb_groups)
+                                fig_pdos.update_layout(
+                                    title=dict(text=f"PDOS — {orb_title}", font=dict(size=26, color='black')),
+                                    xaxis=dict(title=x_label, title_font=dict(size=22),
+                                               tickfont=dict(size=20), gridcolor='lightgray'),
+                                    yaxis=dict(title='PDOS (states/eV)', title_font=dict(size=22),
+                                               tickfont=dict(size=20), gridcolor='lightgray'),
+                                    legend=dict(font=dict(size=16),
+                                                x=1.01, y=1, xanchor='left',
+                                                bgcolor='rgba(255,255,255,0.8)', borderwidth=1),
+                                    height=580, plot_bgcolor='white', hovermode='x unified')
+
+                                st.plotly_chart(fig_pdos)
+
+                                if 'dz2' in available_orbitals and 'dx2-y2' in available_orbitals and \
+                                   any(o in ['dz2','dx2-y2'] for grp in selected_orb_groups
+                                       for o in resolve_orbs(grp)):
+                                    st.info(
+                                        "💡 **Crystal-field tip:** The splitting between dz² and dx²-y² "
+                                        "(eg symmetry in octahedral field) vs dxy/dxz/dyz (t2g) gives "
+                                        "the **10Dq** parameter. Select 'dz2' + 'dx2-y2' vs 'd (all)' "
+                                        "to compare eg and t2g manifolds.")
 
                 except Exception as e:
                     st.error(f"Error processing DOSCAR file: {str(e)}")
-                    st.error("Please ensure your DOSCAR file is in the correct VASP format.")
+                    import traceback
+                    st.error(traceback.format_exc())
 
             tab_idx += 1
 
@@ -1782,7 +2051,7 @@ if uploaded_files:
                     efermi_band = 0.0
                     if doscar_found and doscar_content:
                         try:
-                            _, efermi_band, _, _ = parse_doscar(doscar_content)
+                            _, efermi_band, _, _, _, _ = parse_doscar_full(doscar_content)
                             st.info(f"Using Fermi energy from DOSCAR: {efermi_band:.4f} eV")
                         except:
                             st.warning("Could not extract Fermi energy from DOSCAR. Using 0 eV as reference.")
@@ -2549,7 +2818,6 @@ if uploaded_files:
 
                         if 'ALGO' in params:
                             summary_items.append(f"**Algorithm:** {params['ALGO']}")
-
 
                         if 'IVDW' in params and params['IVDW'] != '0':
                             summary_items.append(f"**Van der Waals:** Enabled (method {params['IVDW']})")
